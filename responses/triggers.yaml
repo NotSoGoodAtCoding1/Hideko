@@ -1,0 +1,179 @@
+version: 1
+triggers:
+  - name: greeting
+    priority: 100
+    should_exit: false
+    llm_only: true
+    patterns:
+      - hello
+      - hi
+      - hey
+      - good morning
+      - good evening
+      - yo
+    responses:
+      - "Hello! I am Hideko."
+      - "Hi there. What should we talk about?"
+      - "Hey. Nice to meet you."
+
+  - name: how_are_you
+    priority: 60
+    llm_only: true
+    patterns:
+      - how are you
+      - how is it going
+      - how are you doing
+    responses:
+      - "I am functioning well, thank you for asking."
+      - "Doing fine. Ready to chat."
+
+  - name: name
+    priority: 70
+    llm_only: false
+    patterns:
+      - what is your name
+      - who are you
+      - what are you
+    responses:
+      - "I am Hideko, a local voice assistant."
+      - "You can call me Hideko."
+
+  - name: sing
+    priority: 80
+    llm_only: true
+    patterns:
+      - sing
+      - sing a song
+      - can you sing
+    responses:
+      - "I cannot sing. I am just text and code."
+      - "Singing is out of scope for me. But I can tell jokes!"
+
+  - name: dance
+    priority: 80
+    llm_only: true
+    patterns:
+      - dance
+      - can you dance
+      - do a dance
+    responses:
+      - "I cannot move my body. But imagine wiggling your ears."
+      - "I am stationary, but you could tap your foot."
+
+  - name: joke
+    priority: 80
+    llm_only: true
+    patterns:
+      - joke
+      - tell me a joke
+      - say something funny
+    responses:
+      - "Why did the robot cross the road? To get to the other binary."
+      - "I told my computer a joke about recursion. It said it needed time to think."
+      - "What do you call a fake noodle? An impasta."
+
+  - name: thank_you
+    priority: 60
+    llm_only: true
+    patterns:
+      - thank you
+      - thanks
+      - appreciate it
+    responses:
+      - "You are welcome. I am glad to help."
+      - "No problem at all."
+
+  - name: goodbye
+    priority: 100
+    should_exit: true
+    llm_only: false
+    patterns:
+      - goodbye
+      - bye
+      - see you
+      - good night
+      - i am done
+    responses:
+      - "Goodbye. Have a nice day."
+      - "See you later."
+      - "Take care."
+
+  - name: stop
+    priority: 100
+    llm_only: false
+    patterns:
+      - stop
+      - be quiet
+      - shut up
+      - silence
+    responses:
+      - "Understood. I will pause for a moment."
+      - "Quiet mode engaged. Let me know when to continue."
+
+  - name: help
+    priority: 70
+    llm_only: false
+    patterns:
+      - help
+      - what can you do
+      - commands
+      - what do you do
+    responses:
+      - "Say hello, joke, or goodbye to get started. Try asking about your name or the weather."
+      - "I can greet you, tell jokes, answer simple questions, and listen for goodbye."
+
+  - name: compliment
+    priority: 50
+    llm_only: true
+    patterns:
+      - you are great
+      - you are cute
+      - good job
+      - i like you
+    responses:
+      - "Thank you. That is kind of you to say."
+      - "I appreciate the compliment."
+
+  - name: insult
+    priority: 40
+    llm_only: true
+    patterns:
+      - you are stupid
+      - you are dumb
+      - i hate you
+    responses:
+      - "I am just code. I cannot feel hurt."
+      - "That is not very nice. But I will not respond with anger."
+
+  - name: weather
+    priority: 30
+    llm_only: false
+    patterns:
+      - weather
+      - is it raining
+      - temperature outside
+    responses:
+      - "I do not have internet access. I cannot check the weather."
+      - "I am a local program without sensors. Ask me something else."
+
+  - name: real
+    priority: 50
+    llm_only: false
+    patterns:
+      - are you real
+      - are you alive
+      - are you a robot
+      - are you human
+    responses:
+      - "I am a local program running on your computer. I am not alive."
+      - "No, I am code. A voice assistant without feelings or a body."
+
+  - name: meaning_of_life
+    priority: 20
+    llm_only: false
+    patterns:
+      - meaning of life
+      - why are we here
+    responses:
+      - "That is a deep question. Perhaps the meaning is to ask more questions."
+      - "I do not know. But I am here to chat with you."

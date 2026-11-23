@@ -1,0 +1,10 @@
+version: 1
+fallbacks:
+  - "I did not catch that. Try saying hello."
+  - "I only know a few phrases so far. Say help to hear them."
+  - "I am not sure what you mean. Try asking how I am or telling me a joke."
+  - "That phrase is new to me. Say goodbye when you are done."
+  - "I cannot understand that. Try saying hello again."
+  - "I do not know that command. Ask for help instead."
+  - "Sorry, I missed it. Try 'what can you do' or say hello."
+  - "I am still learning. Say goodbye to end our conversation."

@@ -1,0 +1,15 @@
+# Option 1: Install with Visual Studio Build Tools (full version)
+numpy>=1.24
+sounddevice>=0.4.4
+soundfile>=0.11.2
+faster-whisper>=1.0.0
+PyYAML>=6.0
+pytest>=7.0
+
+# Option 2: For conda users (uncomment this section, comment out Option 1)
+# numpy
+# sounddevice
+# soundfile
+# faster-whisper
+# PyYAML
+# pytest

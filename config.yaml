@@ -1,0 +1,83 @@
+# Hideko MVP configuration.
+# Paths are relative to the project root (the folder containing this file),
+# never to the current working directory.
+
+audio:
+  input_device: null          # null = system default; or device name substring, or integer index
+  output_device: null         # null = system default; or device name substring, or integer index
+  sample_rate: 16000          # capture rate. MUST stay 16000 for Whisper. Do not change.
+  channels: 1                 # capture is mono. Stereo input is downmixed automatically.
+  block_ms: 32                # 512 frames @ 16 kHz. Must be 10-100.
+  playback_volume: 1.0        # 0.0 - 1.5. Values > 1.0 may clip.
+
+vad:
+  energy_threshold_db: -40.0  # dBFS. Ignored when calibrate: true.
+  calibrate: true             # measure ambient noise for calibration_ms at startup
+  calibration_ms: 1000
+  silence_ms: 450             # trailing silence that ends an utterance (lower = faster turns, but cuts off pauses)
+  min_speech_ms: 200          # speech needed before an utterance is considered started (lower = quicker detection)
+  max_utterance_s: 15         # hard cap; longer speech is truncated and processed
+  pre_roll_ms: 300            # audio kept from before speech onset (avoids clipped first syllable)
+  post_playback_flush_ms: 150 # audio discarded after playback to avoid transcribing our own voice (lower = faster response)
+
+stt:
+  model_size: tiny.en         # tiny.en (~75 MB) or base.en (~145 MB, more accurate, ~2x slower)
+  device: cpu
+  compute_type: int8
+  language: en
+  beam_size: 1                # 1 = greedy, fastest. 5 = slightly better, ~2x slower.
+  cpu_threads: null           # null = half of logical cores (old behaviour); 1-64 to override
+  download_root: models/whisper
+  min_avg_logprob: -1.0       # segments below this are treated as noise
+  max_audio_s: 30             # refuse longer input instead of silently truncating
+
+tts:
+  backend: exe                # "exe" = piper.exe subprocess (default), "python" = piper-tts package
+  piper_exe: models/piper/piper/piper.exe
+  voice_model: models/piper/en_US-amy-medium.onnx
+  length_scale: 1.0           # >1.0 = slower speech, <1.0 = faster
+  max_chars: 300              # longer text is truncated before synthesis
+  timeout_s: 30
+
+responses:
+  triggers_file: responses/triggers.yaml
+  fallbacks_file: responses/fallbacks.yaml
+
+runtime:
+  half_duplex: true           # discard mic input while speaking (prevents feedback loops)
+  max_turns: 0                # 0 = unlimited
+  log_transcripts: true       # false = never write recognized text to the log file
+  greet_on_start: true
+  echo_mode: false            # true = skip response matching, echo the transcript (phase 1 behaviour)
+
+memory:
+  enabled: true              # store learned facts locally; no network
+  file: memory/facts.json    # relative to config.yaml
+  max_facts: 100             # oldest facts are evicted first
+  max_value_chars: 120       # cap each stored value
+
+llm:
+  enabled: false             # opt-in; KoboldCpp must already be running
+  base_url: http://127.0.0.1:5001   # loopback only, no cloud
+  endpoint: /v1/chat/completions    # KoboldCpp OpenAI-compatible endpoint
+  model: local               # ignored by KoboldCpp but required by the API
+  temperature: 0.7
+  max_tokens: 80             # short replies keep LLM turns bounded
+  timeout_s: 15
+  system_prompt: "You are Hideko, a brief friendly voice assistant. Answer in one or two short sentences. Never claim to have internet access."
+  persona_file: persona/hideko.yaml
+
+wake_word:
+  enabled: false             # enable wake word detection (disabled by default for backward compat)
+  phrases:                   # phrases that wake up Hideko (case-insensitive matching)
+    - hideko
+    - hey hideko
+  threshold_db: -35.0        # energy threshold for wake word detection
+  min_wake_duration_ms: 800  # minimum duration of utterance to attempt wake word detection
+  listen_mode_timeout_s: 10.0 # seconds of inactivity before returning to wake word mode
+
+logging:
+  level: INFO                 # DEBUG, INFO, WARNING, ERROR
+  file: logs/hideko.log
+  max_bytes: 1048576          # 1 MB per file
+  backup_count: 3

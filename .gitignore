@@ -1,0 +1,39 @@
+# Python
+.venv/
+.venv_cuda/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Models (large, downloaded by scripts/download_models.py)
+models/piper/*
+!models/piper/.gitkeep
+models/whisper/*
+!models/whisper/.gitkeep
+models/llm/*
+!models/llm/.gitkeep
+
+# Runtime output
+logs/*
+!logs/.gitkeep
+*.wav
+!tests/fixtures/*.wav
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# KoboldCpp binaries (AGPL-3.0, personal use only)
+tools/koboldcpp/
+
+# Scratch / debug files
+debug_file*.py
+fix_*.py
+verify_file.py
+temp_input.txt
+test_output.txt
+test_wav.py
+config_unknown.yaml
+llama-env-specs.txt
