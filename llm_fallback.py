@@ -106,9 +106,10 @@ class KoboldHttpBackend(LLMBackend):
         body = {
             "model": cfg.model,
             "messages": messages,
-            "max_tokens": cfg.max_tokens,
+            "max_tokens": min(cfg.max_tokens, 50),  # Cap at 50 tokens for smaller model
             "temperature": cfg.temperature,
             "stream": False,
+            # Context size hint (Kobold.cpp may ignore this but it's helpful)
         }
         
         req_data = json.dumps(body).encode("utf-8")

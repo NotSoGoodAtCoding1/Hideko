@@ -211,6 +211,7 @@ def test_no_audio_reports_warning_rows(monkeypatch, capsys):
     monkeypatch.setattr(ce, "check_voice_config", lambda: ("OK", "ok"))
     monkeypatch.setattr(ce, "check_voice_compatibility", lambda: ("OK", "ok"))
     monkeypatch.setattr(ce, "check_whisper_model", lambda: ("OK", "ok"))
+    monkeypatch.setattr(ce, "check_llm_server", lambda: ("-", "disabled"))
     monkeypatch.setattr(ce, "check_input_device", lambda: ("WARN", "skipped"))
     monkeypatch.setattr(ce, "check_output_device", lambda: ("WARN", "skipped"))
 

@@ -57,10 +57,10 @@ memory:
   max_value_chars: 120       # cap each stored value
 
 llm:
-  enabled: false             # opt-in; KoboldCpp must already be running
+  enabled: true              # opt-in; KoboldCpp must already be running
   base_url: http://127.0.0.1:5001   # loopback only, no cloud
   endpoint: /v1/chat/completions    # KoboldCpp OpenAI-compatible endpoint
-  model: local               # ignored by KoboldCpp but required by the API
+  model: qwen2.5-0.5b-instruct-q4_k_m.gguf   # use smaller model for faster CPU inference
   temperature: 0.7
   max_tokens: 80             # short replies keep LLM turns bounded
   timeout_s: 15
