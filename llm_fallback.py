@@ -19,6 +19,8 @@ import typing
 import urllib.error
 import urllib.request
 
+import yaml
+
 from config import AppConfig
 from errors import LLMError
 from memory_store import MemoryStore
