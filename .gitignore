@@ -37,3 +37,18 @@ test_output.txt
 test_wav.py
 config_unknown.yaml
 llama-env-specs.txt
+
+# Task/docs artifacts (do not publish)
+architecture-tasks/
+debug-tasks/
+improvement-tasks/
+kobold-tasks/
+tasks/
+plan.md
+test_results.md
+test_results_gpu.md
+
+# Dev scripts / scratch / runtime data
+scripts/
+scratch/
+memory/facts.json
