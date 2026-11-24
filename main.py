@@ -13,6 +13,8 @@ from audio_manager import AudioError, Microphone, Speaker, list_devices
 from cli import CliOptions, KeyListener, Status, parse_args
 from config import AppConfig, ConfigError, load_config
 from errors import HidekoError
+from event_outputs import ConsoleSubscriber
+from events import ALL, EventBus
 from logging_setup import memory_rss_mb, setup_logging
 from memory_store import MemoryStore
 from response_handler import EchoResponder, ResponseHandler, Response, normalize
@@ -24,11 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 class HidekoApp:
-    def __init__(self, config: AppConfig, opts: CliOptions) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        opts: CliOptions,
+        bus: EventBus | None = None,
+        status: Status | None = None,
+    ) -> None:
         self.config = config
         self.opts = opts
         self.keys = KeyListener()
-        self.status = Status()
+        self.bus = bus if bus is not None else EventBus()
+        self.status = status if status is not None else Status()
         self._closed = False
         self._paused = False
         self._listening_shown = False
@@ -50,6 +59,7 @@ class HidekoApp:
 
         # 2. print/l logging "Hideko MVP — Ctrl+C to stop"
         logger.info("Hideko MVP — Ctrl+C to stop")
+        self.bus.publish("startup")
 
         # 3. self.stt = STTEngine(config); log "STT ready in X.Xs" from warmup()
         self.stt = STTEngine(self.config)
@@ -72,7 +82,7 @@ class HidekoApp:
 
         # 7. if config.vad.calibrate: print "Stay quiet for 1 second — calibrating..." BEFORE calling recorder.calibrate(self.mic)
         if self.config.vad.calibrate:
-            print("Stay quiet for 1 second — calibrating...")
+            self.bus.publish("calibrating")
             self.recorder.calibrate(self.mic)
 
         # 8. Initialize memory store if enabled
@@ -87,6 +97,12 @@ class HidekoApp:
         else:
             self.responder = ResponseHandler(self.config, memory=self.memory)
             logger.info("responder: ResponseHandler (%d triggers)", self.responder.trigger_count)
+
+        self.bus.publish(
+            "ready",
+            stt_s=secs,
+            trigger_count=getattr(self.responder, "trigger_count", 0),
+        )
 
         # 9. if config.runtime.greet_on_start: synthesize+play greeting once
         if self.config.runtime.greet_on_start and not self.opts.no_greet and self.tts is not None:
@@ -108,9 +124,9 @@ class HidekoApp:
                     self._paused = not self._paused
                     self._listening_shown = False
                     if self._paused:
-                        self.status.paused()
+                        self.bus.publish("paused")
                     else:
-                        self.status.listening()
+                        self.bus.publish("listening")
                         self._listening_shown = True
                 if self._paused:
                     self.mic.flush(self.config.audio.block_ms)
@@ -123,7 +139,7 @@ class HidekoApp:
                     if perf_counter() > self._wake_word_timeout:
                         self._wake_word_detected = False
                         logger.info("Listen mode timeout, returning to wake word detection")
-                        self.status.listening()
+                        self.bus.publish("listening")
                         self._listening_shown = True
                 
                 utterance = self.recorder.process_block(block)
@@ -133,7 +149,7 @@ class HidekoApp:
                     continue
 
                 if not self._listening_shown:
-                    self.status.listening()
+                    self.bus.publish("listening")
                     self._listening_shown = True
                 
                 # Wake word detection mode
@@ -147,41 +163,45 @@ class HidekoApp:
                             self._wake_word_detected = True
                             self._wake_word_timeout = perf_counter() + self.config.wake_word.listen_mode_timeout_s
                             logger.info(f"Wake word detected: '{transcript.text}'")
-                            print(f"  [wake word detected in {t1-t0:.1f}s]")
+                            self.bus.publish("wake_detected", text=transcript.text, latency_s=t1 - t0)
                             continue
                     # Not a wake word, loop back to listen for wake word
                     continue
                 
                 # Normal command processing (when not in wake word mode or after timeout)
                 t0 = perf_counter()
-                self.status.thinking()
+                self.bus.publish("thinking")
                 transcript = self.stt.transcribe(utterance, self.config.audio.sample_rate)
                 t1 = perf_counter()
                 if not transcript.text:
-                    print("  (didn't catch that)")
+                    self.bus.publish("missed")
                     self.recorder.reset()
                     continue
 
-                self.status.heard(transcript.text)
+                self.bus.publish("heard", text=transcript.text)
                 if self.memory is not None and self.memory.observe(transcript.text):
                     self.memory.save()
                 response = self.responder.respond(transcript.text)
                 t2 = perf_counter()
 
                 if self.opts.no_tts:
-                    print(f"Hideko: {response.text}")
+                    self.bus.publish("speaking", text=response.text)
                     t3 = t2
                     t4 = t2
                 else:
-                    self.status.say(response.text)
+                    self.bus.publish("speaking", text=response.text)
                     clip = self.tts.synthesize(response.text)
                     t3 = perf_counter()
                     self.speaker.play(clip.samples, clip.sample_rate)
                     t4 = perf_counter()
 
-                print(
-                    f"  [stt {t1-t0:.1f}s | resp {t2-t1:.2f}s | tts {t3-t2:.2f}s "
-                    f"| play {t4-t3:.2f}s | total {t4-t0:.1f}s]"
+                self.bus.publish(
+                    "turn_timing", 
+                    stt=t1-t0, 
+                    resp=t2-t1, 
+                    tts=t3-t2, 
+                    play=t4-t3, 
+                    total=t4-t0
                 )
                 logger.info(
                     "timing stt=%.2f resp=%.3f tts=%.2f play=%.2f total=%.2f",
@@ -189,7 +209,7 @@ class HidekoApp:
                 )
 
                 if response.should_exit:
-                    print("\nGoodbye.")
+                    self.bus.publish("goodbye")
                     break
                 turn += 1
 
@@ -210,7 +230,7 @@ class HidekoApp:
 
             return 0
         except HidekoError as exc:
-            print(f"  ({exc})")
+            self.bus.publish("error", message=str(exc), exit_code=getattr(exc, "exit_code", 1))
             logger.exception("turn failed: %s", exc)
             self._consecutive_errors += 1
             sys.exit(getattr(exc, "exit_code", 1))
@@ -220,6 +240,7 @@ class HidekoApp:
         if self._closed:
             return
         self._closed = True
+        self.bus.publish("shutdown")
         if self.speaker is not None:
             try:
                 self.speaker.close()
@@ -261,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
             reconfigure(errors="replace")
 
     opts = parse_args(argv)
+
+    # Set up event bus and console subscriber for all output
+    bus = EventBus()
+    console = ConsoleSubscriber(Status())
+    bus.subscribe(ALL, console.handle)
 
     # Early-exit flags before config loading where possible
     if opts.list_devices:
@@ -339,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
             if memory is not None and memory.observe(opts.text):
                 memory.save()
             response = responder.respond(opts.text)
-            print(f"Hideko: {response.text}")
+            bus.publish("speaking", text=response.text)
             if not opts.no_tts:
                 clip = TTSEngine(config).synthesize(response.text)
                 Speaker(config).play(clip.samples, clip.sample_rate)
@@ -348,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
             return exc.exit_code
         return 0
 
-    app = HidekoApp(config, opts)
+    app = HidekoApp(config, opts, bus=bus)
     try:
         app.setup()
         return app.run()
