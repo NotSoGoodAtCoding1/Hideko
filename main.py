@@ -15,6 +15,7 @@ from config import AppConfig, ConfigError, load_config
 from errors import HidekoError
 from event_outputs import ConsoleSubscriber
 from events import ALL, EventBus
+from turn_state import TurnController, TurnState
 from logging_setup import memory_rss_mb, setup_logging
 from memory_store import MemoryStore
 from response_handler import EchoResponder, ResponseHandler, Response, normalize
@@ -32,12 +33,14 @@ class HidekoApp:
         opts: CliOptions,
         bus: EventBus | None = None,
         status: Status | None = None,
+        turn: TurnController | None = None,
     ) -> None:
         self.config = config
         self.opts = opts
         self.keys = KeyListener()
         self.bus = bus if bus is not None else EventBus()
         self.status = status if status is not None else Status()
+        self.turn = turn if turn is not None else TurnController(self.bus)
         self._closed = False
         self._paused = False
         self._listening_shown = False
@@ -104,6 +107,9 @@ class HidekoApp:
             trigger_count=getattr(self.responder, "trigger_count", 0),
         )
 
+        # Initialize turn state to IDLE
+        self.turn.transition(TurnState.IDLE)
+
         # 9. if config.runtime.greet_on_start: synthesize+play greeting once
         if self.config.runtime.greet_on_start and not self.opts.no_greet and self.tts is not None:
             clip = self.tts.synthesize("Hello. I am Hideko. I am listening.")
@@ -125,9 +131,11 @@ class HidekoApp:
                     self._listening_shown = False
                     if self._paused:
                         self.bus.publish("paused")
+                        self.turn.transition(TurnState.PAUSED)
                     else:
                         self.bus.publish("listening")
                         self._listening_shown = True
+                        self.turn.transition(TurnState.LISTENING)
                 if self._paused:
                     self.mic.flush(self.config.audio.block_ms)
                     continue
@@ -140,6 +148,7 @@ class HidekoApp:
                         self._wake_word_detected = False
                         logger.info("Listen mode timeout, returning to wake word detection")
                         self.bus.publish("listening")
+                        self.turn.transition(TurnState.LISTENING)
                         self._listening_shown = True
                 
                 utterance = self.recorder.process_block(block)
@@ -148,9 +157,11 @@ class HidekoApp:
                 if len(utterance) < 0.30 * self.config.audio.sample_rate:
                     continue
 
+                # First-time listening indicator (moved to TurnController)
                 if not self._listening_shown:
                     self.bus.publish("listening")
                     self._listening_shown = True
+                    self.turn.transition(TurnState.LISTENING)
                 
                 # Wake word detection mode
                 if self.config.wake_word.enabled and not self._wake_word_detected:
@@ -164,13 +175,16 @@ class HidekoApp:
                             self._wake_word_timeout = perf_counter() + self.config.wake_word.listen_mode_timeout_s
                             logger.info(f"Wake word detected: '{transcript.text}'")
                             self.bus.publish("wake_detected", text=transcript.text, latency_s=t1 - t0)
+                            self.turn.transition(TurnState.LISTENING)  # Exit wake mode, go to listening
                             continue
-                    # Not a wake word, loop back to listen for wake word
+                    # Not a wake word, loop back waiting for wake word
+                    self.turn.transition(TurnState.WAITING_FOR_WAKE_WORD)
                     continue
                 
                 # Normal command processing (when not in wake word mode or after timeout)
                 t0 = perf_counter()
                 self.bus.publish("thinking")
+                self.turn.transition(TurnState.THINKING)
                 transcript = self.stt.transcribe(utterance, self.config.audio.sample_rate)
                 t1 = perf_counter()
                 if not transcript.text:
@@ -188,12 +202,14 @@ class HidekoApp:
                     self.bus.publish("speaking", text=response.text)
                     t3 = t2
                     t4 = t2
+                    self.turn.transition(TurnState.SPEAKING)
                 else:
                     self.bus.publish("speaking", text=response.text)
                     clip = self.tts.synthesize(response.text)
                     t3 = perf_counter()
                     self.speaker.play(clip.samples, clip.sample_rate)
                     t4 = perf_counter()
+                    self.turn.transition(TurnState.SPEAKING)
 
                 self.bus.publish(
                     "turn_timing", 
@@ -210,6 +226,7 @@ class HidekoApp:
 
                 if response.should_exit:
                     self.bus.publish("goodbye")
+                    self.turn.transition(TurnState.IDLE)
                     break
                 turn += 1
 
@@ -219,6 +236,7 @@ class HidekoApp:
                 if self.config.runtime.half_duplex:
                     self.recorder.reset()
                     self.mic.flush(self.config.vad.post_playback_flush_ms)
+                    self.turn.transition(TurnState.IDLE)
 
                 # Log memory every 20 turns
                 if turn % 20 == 0:
@@ -233,6 +251,7 @@ class HidekoApp:
             self.bus.publish("error", message=str(exc), exit_code=getattr(exc, "exit_code", 1))
             logger.exception("turn failed: %s", exc)
             self._consecutive_errors += 1
+            self.turn.transition(TurnState.IDLE)
             sys.exit(getattr(exc, "exit_code", 1))
 
     def shutdown(self) -> None:
