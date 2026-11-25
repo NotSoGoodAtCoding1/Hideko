@@ -26,6 +26,7 @@ class Response:
     trigger: str
     is_fallback: bool
     should_exit: bool = False
+    tool_action: str | None = None
 
 
 class EchoResponder:
@@ -55,6 +56,7 @@ class Trigger:
     responses: tuple[str, ...]
     should_exit: bool = False
     llm_only: bool = False
+    tool: str | None = None
 
 
 @dataclass
@@ -172,6 +174,12 @@ class ResponseHandler:
                     f"Trigger '{name}' llm_only must be a boolean, got {type(llm_only).__name__}"
                 )
 
+            tool = trigger_raw.get("tool")
+            if tool is not None and not isinstance(tool, str):
+                raise ResponseDataError(
+                    f"Trigger '{name}' tool must be a string, got {type(tool).__name__}"
+                )
+
             # Compile patterns with word boundaries and escaping
             compiled_patterns = []
             for pattern_idx, pattern in enumerate(patterns_raw):
@@ -188,6 +196,7 @@ class ResponseHandler:
                 responses=tuple(responses_raw),
                 should_exit=should_exit,
                 llm_only=llm_only,
+                tool=tool,
             )
             self._triggers.append(trigger)
             # Store: (trigger, pattern_text, compiled_regex, word_count)
@@ -267,6 +276,7 @@ class ResponseHandler:
         # Pick the best match by score key (max)
         best_match = max(matches, key=lambda x: x[2])
         trigger, pattern, _ = best_match
+        tool_action = trigger.tool
 
         logger.debug(f"match: {normalized!r} -> {trigger.name} (priority {trigger.priority}, pattern {pattern!r})")
 
@@ -342,6 +352,7 @@ class ResponseHandler:
             trigger=trigger.name,
             is_fallback=False,
             should_exit=trigger.should_exit,
+            tool_action=tool_action,
         )
 
     def _try_llm(self, text: str, intent: str | None = None) -> Response | None:

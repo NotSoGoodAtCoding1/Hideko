@@ -12,6 +12,8 @@ from config import load_config
 from events import Event, EventBus
 from memory_store import MemoryStore
 from response_handler import ResponseHandler
+from tools.registry import ToolRegistry
+from tools.scheduler import Scheduler
 
 
 def test_timing_before_exit():
@@ -89,3 +91,24 @@ def test_error_event_published():
     assert received[0].kind == "error"
     assert received[0].data["message"] == "boom"
     assert received[0].data["exit_code"] == 3
+
+
+def test_app_has_registry_and_scheduler():
+    """The HidekoApp has registry and scheduler wired when provided."""
+    bus = EventBus()
+    registry = ToolRegistry()
+    scheduler = Scheduler(bus)
+
+    app = main.HidekoApp(load_config(), parse_args([]), bus=bus, registry=registry, scheduler=scheduler)
+
+    # Verify the app has registry and scheduler
+    assert app.registry is not None, "app should have a registry"
+    assert app.scheduler is not None, "app should have a scheduler"
+    
+    # Verify they're the default instances (not injected ones)
+    assert isinstance(app.registry, ToolRegistry)
+    assert isinstance(app.scheduler, Scheduler)
+
+    # Clean up - stop any started schedulers
+    if scheduler._thread is not None and scheduler._thread.is_alive():
+        scheduler.stop(timeout_s=0.5)

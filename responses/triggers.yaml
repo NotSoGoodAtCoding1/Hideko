@@ -110,6 +110,19 @@ triggers:
       - "Understood. I will pause for a moment."
       - "Quiet mode engaged. Let me know when to continue."
 
+  - name: set_timer
+    priority: 90
+    should_exit: false
+    tool: set_timer
+    patterns:
+      - set a timer for
+      - set timer for
+      - start timer for
+      - timer for
+      - countdown for
+    responses:
+      - "I will set the timer."
+
   - name: help
     priority: 70
     llm_only: false

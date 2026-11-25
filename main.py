@@ -4,6 +4,7 @@ import dataclasses
 import gc
 import logging
 import sys
+import threading
 from pathlib import Path
 from time import perf_counter
 
@@ -15,6 +16,8 @@ from config import AppConfig, ConfigError, load_config
 from errors import HidekoError
 from event_outputs import ConsoleSubscriber
 from events import ALL, EventBus
+from tools.registry import ToolRegistry
+from tools.scheduler import Scheduler
 from turn_state import TurnController, TurnState
 from logging_setup import memory_rss_mb, setup_logging
 from memory_store import MemoryStore
@@ -26,6 +29,22 @@ from vad import UtteranceRecorder
 logger = logging.getLogger(__name__)
 
 
+def _load_gui_launcher():
+    """Return the GUI launcher if PySide6 is available, otherwise None.
+
+    Qt is imported lazily, and only after ctranslate2. Importing PySide6 before
+    ctranslate2 loads Qt's DLLs first, which makes Whisper model construction
+    crash with a native access violation on Windows.
+    """
+    try:
+        import ctranslate2  # noqa: F401  (DLL load-order guard for PySide6)
+        from gui import launch_gui
+    except ImportError as exc:
+        logger.debug("GUI not available: %s", exc)
+        return None
+    return launch_gui
+
+
 class HidekoApp:
     def __init__(
         self,
@@ -34,6 +53,9 @@ class HidekoApp:
         bus: EventBus | None = None,
         status: Status | None = None,
         turn: TurnController | None = None,
+        registry: ToolRegistry | None = None,
+        scheduler: Scheduler | None = None,
+        gui_app: object | None = None,  # GUI app instance for Qt event processing
     ) -> None:
         self.config = config
         self.opts = opts
@@ -41,11 +63,15 @@ class HidekoApp:
         self.bus = bus if bus is not None else EventBus()
         self.status = status if status is not None else Status()
         self.turn = turn if turn is not None else TurnController(self.bus)
+        self.registry = registry if registry is not None else ToolRegistry()
+        self.scheduler = scheduler if scheduler is not None else Scheduler(self.bus)
         self._closed = False
         self._paused = False
         self._listening_shown = False
         self._wake_word_detected = False
         self._wake_word_timeout = 0.0
+        self._pending_speech: list[str] = []
+        self._speech_lock = threading.Lock()
         self.stt: STTEngine | None = None
         self.tts: TTSEngine | None = None
         self.speaker: Speaker | None = None
@@ -53,6 +79,7 @@ class HidekoApp:
         self.recorder: UtteranceRecorder | None = None
         self.responder: EchoResponder | None = None
         self.memory: MemoryStore | None = None
+        self._gui_app = gui_app  # Store GUI app reference for Qt event processing
 
     def setup(self) -> None:
         # 1. logging setup at the very start
@@ -109,11 +136,28 @@ class HidekoApp:
 
         # Initialize turn state to IDLE
         self.turn.transition(TurnState.IDLE)
+        
+        # Start the background scheduler (idempotent; main() already started it)
+        self.scheduler.start()
 
         # 9. if config.runtime.greet_on_start: synthesize+play greeting once
         if self.config.runtime.greet_on_start and not self.opts.no_greet and self.tts is not None:
             clip = self.tts.synthesize("Hello. I am Hideko. I am listening.")
             self.speaker.play(clip.samples, clip.sample_rate)
+
+    def _process_qt_events(self) -> None:
+        """Process Qt events if GUI is available.
+        
+        Called around blocking operations (mic reads, STT, TTS, playback)
+        to keep the window responsive and prevent Windows from flagging
+        it as "Not responding" during idle periods.
+        """
+        if self._gui_app is not None and hasattr(self._gui_app, 'process_events'):
+            try:
+                self._gui_app.process_events()
+            except Exception:
+                # Ignore Qt event processing errors to avoid breaking audio loop
+                pass
 
     def run(self) -> int:
         try:
@@ -121,6 +165,10 @@ class HidekoApp:
             while True:
                 if self.config.runtime.max_turns and turn >= self.config.runtime.max_turns:
                     break
+
+                # Process Qt events if GUI is available (keeps window responsive,
+                # prevents Windows "Not responding" during idle/blocking calls)
+                self._process_qt_events()
 
                 # Key handling at top of loop
                 key = self.keys.poll()
@@ -140,7 +188,39 @@ class HidekoApp:
                     self.mic.flush(self.config.audio.block_ms)
                     continue
 
+                # Process Qt events before blocking mic read
+                self._process_qt_events()
+
+                # Speak any pending tool results (e.g. timer finished) before listening.
+                # NOTE: mic.read_block() blocks, so pending speech is delivered on
+                # the next audio block. Timer speech may be delayed until the user
+                # speaks again — acceptable for v1.
+                with self._speech_lock:
+                    pending = list(self._pending_speech)
+                    self._pending_speech.clear()
+                if pending and not self.turn.is_speaking():
+                    self.turn.transition(TurnState.SPEAKING)
+                    for text in pending:
+                        self.bus.publish("speaking", text=text)
+                        self._process_qt_events()
+                        clip = self.tts.synthesize(text)
+                        self._process_qt_events()
+                        self.speaker.play(clip.samples, clip.sample_rate)
+                        self._process_qt_events()
+                    self.turn.transition(TurnState.IDLE)
+
                 block = self.mic.read_block()
+                
+                # Process Qt events after blocking mic read
+                self._process_qt_events()
+                
+                # Feed audio to GUI visualization
+                if self._gui_app is not None and hasattr(self._gui_app, 'update_audio_visualization'):
+                    try:
+                        self._gui_app.update_audio_visualization(block)
+                    except Exception:
+                        # Don't let visualization errors break the audio loop
+                        pass
                 
                 # Check for listen mode timeout (only when wake word mode is enabled)
                 if self.config.wake_word.enabled and self._wake_word_detected:
@@ -165,9 +245,11 @@ class HidekoApp:
                 
                 # Wake word detection mode
                 if self.config.wake_word.enabled and not self._wake_word_detected:
+                    self._process_qt_events()
                     t0 = perf_counter()
                     transcript = self.stt.transcribe(utterance, self.config.audio.sample_rate)
                     t1 = perf_counter()
+                    self._process_qt_events()
                     
                     if transcript.text:
                         if self._check_wake_word(transcript.text):
@@ -185,8 +267,10 @@ class HidekoApp:
                 t0 = perf_counter()
                 self.bus.publish("thinking")
                 self.turn.transition(TurnState.THINKING)
+                self._process_qt_events()
                 transcript = self.stt.transcribe(utterance, self.config.audio.sample_rate)
                 t1 = perf_counter()
+                self._process_qt_events()
                 if not transcript.text:
                     self.bus.publish("missed")
                     self.recorder.reset()
@@ -205,10 +289,13 @@ class HidekoApp:
                     self.turn.transition(TurnState.SPEAKING)
                 else:
                     self.bus.publish("speaking", text=response.text)
+                    self._process_qt_events()
                     clip = self.tts.synthesize(response.text)
                     t3 = perf_counter()
+                    self._process_qt_events()
                     self.speaker.play(clip.samples, clip.sample_rate)
                     t4 = perf_counter()
+                    self._process_qt_events()
                     self.turn.transition(TurnState.SPEAKING)
 
                 self.bus.publish(
@@ -228,6 +315,22 @@ class HidekoApp:
                     self.bus.publish("goodbye")
                     self.turn.transition(TurnState.IDLE)
                     break
+
+                # Execute tool action if the matched trigger requested one
+                if response.tool_action:
+                    result = self.registry.execute(
+                        response.tool_action,
+                        text=transcript.text,
+                        response_text=response.text,
+                    )
+                    if result.ok and result.text:
+                        with self._speech_lock:
+                            self._pending_speech.append(result.text)
+                    elif not result.ok:
+                        logger.warning(
+                            "tool %s failed: %s", response.tool_action, result.error
+                        )
+
                 turn += 1
 
                 # Reset consecutive error counter after successful turn
@@ -237,6 +340,14 @@ class HidekoApp:
                     self.recorder.reset()
                     self.mic.flush(self.config.vad.post_playback_flush_ms)
                     self.turn.transition(TurnState.IDLE)
+
+                # Process Qt events if GUI is available (every ~16ms for smooth UI updates)
+                if self._gui_app is not None and hasattr(self._gui_app, 'process_events'):
+                    try:
+                        self._gui_app.process_events()
+                    except Exception:
+                        # Ignore Qt event processing errors to avoid breaking audio loop
+                        pass
 
                 # Log memory every 20 turns
                 if turn % 20 == 0:
@@ -270,6 +381,15 @@ class HidekoApp:
                 self.mic.close()
             except Exception:
                 pass
+
+        # Stop the background scheduler
+        if self.scheduler is not None:
+            self.scheduler.stop()
+
+    def _queue_speech(self, text: str) -> None:
+        """Thread-safe: queue text to be spoken at the start of the next loop."""
+        with self._speech_lock:
+            self._pending_speech.append(text)
 
     def _check_wake_word(self, transcript_text: str) -> bool:
         """Check if transcript contains a wake word phrase.
@@ -306,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
     bus = EventBus()
     console = ConsoleSubscriber(Status())
     bus.subscribe(ALL, console.handle)
+
+    # Tool registry and background scheduler
+    registry = ToolRegistry()
+    scheduler = Scheduler(bus)
+    scheduler.start()
 
     # Early-exit flags before config loading where possible
     if opts.list_devices:
@@ -384,16 +509,52 @@ def main(argv: list[str] | None = None) -> int:
             if memory is not None and memory.observe(opts.text):
                 memory.save()
             response = responder.respond(opts.text)
-            bus.publish("speaking", text=response.text)
-            if not opts.no_tts:
-                clip = TTSEngine(config).synthesize(response.text)
-                Speaker(config).play(clip.samples, clip.sample_rate)
+            
+            # Handle tool action for text input (if any)
+            if response.tool_action:
+                result = registry.execute(
+                    response.tool_action,
+                    text=opts.text,
+                    response_text=response.text,
+                )
+                if result.ok and result.text:
+                    bus.publish("speaking", text=result.text)
+                    if not opts.no_tts:
+                        clip = TTSEngine(config).synthesize(result.text)
+                        Speaker(config).play(clip.samples, clip.sample_rate)
+            else:
+                bus.publish("speaking", text=response.text)
+                if not opts.no_tts:
+                    clip = TTSEngine(config).synthesize(response.text)
+                    Speaker(config).play(clip.samples, clip.sample_rate)
         except HidekoError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return exc.exit_code
         return 0
 
-    app = HidekoApp(config, opts, bus=bus)
+    # Launch GUI if requested
+    gui_app = None
+    if opts.gui:
+        launch_gui = _load_gui_launcher()
+        if launch_gui is None:
+            logger.warning("GUI requested but PySide6 not available, continuing with CLI")
+        else:
+            try:
+                gui_app = launch_gui(config, bus)
+                if gui_app is None:
+                    logger.warning("GUI failed to launch, continuing with CLI")
+            except Exception as e:
+                logger.error("GUI launch error: %s", e)
+                logger.info("Continuing with CLI only")
+
+    # Create app first, then register timer tool after scheduler starts
+    app = HidekoApp(config, opts, bus=bus, registry=registry, scheduler=scheduler, gui_app=gui_app)
+    
+    # Register the timer tool after app is created (needs access to _queue_speech)
+    from tools.timer_tool import TimerTool
+    timer_tool = TimerTool(scheduler, bus, app._queue_speech)
+    registry.register(timer_tool)
+    
     try:
         app.setup()
         return app.run()
@@ -404,6 +565,12 @@ def main(argv: list[str] | None = None) -> int:
         print()
         return 0
     finally:
+        # Clean up GUI if it exists
+        if gui_app is not None:
+            try:
+                gui_app.close()
+            except Exception:
+                pass
         app.shutdown()
 
 

@@ -25,6 +25,7 @@ class CliOptions:
     mute_key: str
     facts: bool
     forget: bool
+    gui: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,6 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Delete all remembered facts and exit",
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        default=False,
+        help="Enable GUI interface",
+    )
     return parser
 
 
@@ -132,6 +139,7 @@ def parse_args(argv: list[str] | None = None) -> CliOptions:
         mute_key=args.mute_key,
         facts=args.facts,
         forget=args.forget,
+        gui=args.gui,
     )
 
 

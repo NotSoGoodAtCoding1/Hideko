@@ -19,6 +19,8 @@ Speak into your microphone; she answers out loud. Everything runs locally: no cl
 | GPU | not required for core features; KoboldCpp decides GPU use |
 | Measured turn latency | **observed; no target set for this sprint** (see [`logs/benchmark.md`](logs/benchmark.md)) |
 | Tested on | Windows 11, Python 3.11, 4-core CPU, 16 GB RAM |
+| Tool registry | registry + background scheduler; timer tool available |
+| Turn state machine | idle/listening/thinking/speaking/paused/waiting_for_wake_word |
 
 ---
 
@@ -129,6 +131,7 @@ Hideko: Hello! I am Hideko.
 | `q` | quit |
 | `Ctrl+C` | quit |
 | `--text "..."` | one-shot without the mic |
+| `--text "set a timer for 2 minutes"` | test timer tool without mic |
 | `--no-tts` | print replies without audio |
 | `--list-devices` | show audio devices |
 | `--turns N` | stop after N exchanges |
@@ -164,12 +167,17 @@ Key settings you might change (see `config.yaml` for full details):
 | `llm.timeout_s` | 15 | HTTP timeout for LLM requests |
 | `tts.length_scale` | 1.0 | Speech speed: >1.0 = slower, <1.0 = faster |
 | `runtime.max_turns` | 0 | Unlimited; set to N to stop after N exchanges |
+| `runtime.tools_enabled` | true | Enable tools (registry + background scheduler) |
 | `runtime.half_duplex` | true | Discard mic input while speaking (prevents feedback) |
 | `logging.level` | INFO | DEBUG, INFO, WARNING, ERROR |
 
 **How to change the voice:** Edit `config.yaml`, set `audio.output_device` to your speaker name or index from `--list-devices`.
 
 **How to add a trigger:** Edit `responses/triggers.yaml`. Add a new trigger block with `name`, `priority`, `patterns` (list of phrases), and `responses` (list of replies). Set `llm_only: true` to make a matched trigger conversational (LLM-written, with canned responses as fallback); omit it or set `false` to keep canned replies.
+
+**How to add a tool:** Create a class subclassing `Tool` in `tools/`, implement `execute(**kwargs)`, register it with the `ToolRegistry`, and wire it via YAML trigger's `tool:` key (e.g., `set_timer` has `tool: set_timer`). The `tool:` key invokes the tool after the trigger's response is spoken; tools can schedule background actions and queue speech.
+
+**Trigger example:** The `set_timer` trigger uses `tool: set_timer`. When you say "set a timer for 5 minutes", the response handler matches the trigger, speaks "I will set the timer.", then executes `set_timer` with `text="set a timer for 5 minutes"`. The tool parses the duration, schedules a background job via `Scheduler`, and when the timer fires it publishes `timer_finished` event + queues speech.
 
 ---
 
@@ -206,6 +214,9 @@ Key settings you might change (see `config.yaml` for full details):
 - `llm.enabled` stays `false` by default: conversational `llm_only` triggers and unmatched input use the LLM only when enabled
 - Single-threaded, blocking loop
 - Laptop speakers can cause feedback; use headphones
+- **Timer speech**: Timer fires on background thread, but speech is delivered on the next user utterance because `mic.read_block()` blocks in the audio loop
+- **Tools**: Only `set_timer` tool is built-in; add tools by subclassing `Tool`, implementing `execute()`, and registering with `ToolRegistry`
+- **Tool invocation**: Tools are invoked by YAML trigger's `tool:` key (e.g., `set_timer` has `tool: set_timer`), not by LLM tool-calling
 
 ---
 
@@ -226,6 +237,8 @@ Key settings you might change (see `config.yaml` for full details):
 | LLM reply falls back to canned/YAML | Confirm KoboldCpp is running, `llm.enabled: true`, and `llm.base_url` points to loopback |
 | facts file corrupt | Hideko starts empty; run `python main.py --forget` to clear |
 | Memory grows over hours | Restart; `logs/hideko.log` shows RSS every 20 turns |
+| `Tool %s failed` | Check `logs/hideko.log` for the full stack trace |
+| unknown tool error | The `tool:` key in `triggers.yaml` must match a registered tool name (e.g., `set_timer`) |
 
 ---
 
@@ -244,6 +257,9 @@ memory_store.py      persistent JSON fact storage
 llm_fallback.py      loopback HTTP client for KoboldCpp (not an in-process model loader)
 persona/hideko.yaml  persona/character card sent as the system prompt
 responses/*.yaml     trigger database
+tools/registry.py    named tool registry; thread-safe, returns ToolResult
+tools/scheduler.py   background delayed-callback scheduler daemon thread
+tools/timer_tool.py  set_timer: parses duration from text, schedules fire via scheduler, publishes timer_finished event + queues speech
 models/              downloaded models (gitignored)
   ├── whisper/       faster-whisper tiny.en
   ├── piper/         piper.exe + en_US-amy-medium.onnx

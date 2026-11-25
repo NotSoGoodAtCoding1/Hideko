@@ -1,8 +1,47 @@
 import numpy as np
 import pytest
 import yaml
+import threading
 
 from config import load_config
+
+
+# Track all created threads for cleanup
+_created_threads = []
+
+
+@pytest.fixture(autouse=True, scope="session")
+def session_cleanup_threads():
+    """Join all tracked threads before and after each test session."""
+    def join_all():
+        for t in list(_created_threads):
+            try:
+                if t.is_alive():
+                    t.join(timeout=0.5)
+            except Exception:
+                pass
+    
+    yield
+    
+    # Cleanup after everything
+    join_all()
+    _created_threads.clear()
+
+
+@pytest.fixture(autouse=True, scope="function")
+def function_cleanup_threads():
+    """Join any threads created during this test before next test."""
+    def join_all():
+        for t in list(_created_threads):
+            try:
+                if t.is_alive():
+                    t.join(timeout=0.3)
+            except Exception:
+                pass
+    
+    yield
+    # Cleanup after this function
+    join_all()
 
 
 @pytest.fixture

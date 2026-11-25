@@ -1,0 +1,5 @@
+# GUI-specific dependencies for Hideko
+# These are optional and separate from core requirements.txt
+# Install with: python -m pip install -r requirements-gui.txt
+
+PySide6==6.7.0

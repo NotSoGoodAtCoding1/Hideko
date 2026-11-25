@@ -1,0 +1,14 @@
+---
+
+## Turn state machine & tool registry phase
+
+### Decisions
+- Turn state extracted into TurnController/TurnState (idle, listening, thinking, speaking, paused, waiting_for_wake_word); transitions publish bus events.
+- Tool registry + background scheduler under tools/; tools execute after their trigger's response is spoken.
+- First tool: set_timer (background callback fires timer_finished event + queues speech).
+- Tools are configured via YAML trigger `tool:` key, not LLM tool-calling (v1).
+- v1 limitation: mic.read_block() blocks, so timer speech waits for the next utterance.
+
+### Still out of scope
+- Avatar GUI, wake-word optimization, barge-in, LLM tool-calling, config schema versioning
+
