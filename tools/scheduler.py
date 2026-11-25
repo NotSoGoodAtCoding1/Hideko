@@ -84,7 +84,7 @@ class Scheduler:
             with self._condition:
                 if not self._heap:
                     # Wait for a new job or stop.
-                    self._condition.wait(timeout=0.5)
+                    self._condition.wait()
                     continue
                 run_at = self._heap[0][0]
                 now = time.monotonic()

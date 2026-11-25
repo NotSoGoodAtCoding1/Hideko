@@ -54,11 +54,16 @@ class SystemTray(QObject):
         self._listening = False
         self._speaking = False
         
-        # Create icon
-        self._icon = self._create_icon()
-        
+        # Create icons once and reuse on state changes.
+        self._icons = {
+            "idle": self._create_icon(),
+            "listening": self._create_listening_icon(),
+            "speaking": self._create_speaking_icon(),
+            "muted": self._create_muted_icon(),
+        }
+
         # Create tray icon
-        self._tray_icon = QSystemTrayIcon(self._icon)
+        self._tray_icon = QSystemTrayIcon(self._icons["idle"])
         self._tray_icon.setToolTip("Hideko - Local Voice Assistant")
         
         # Create menu
@@ -68,7 +73,7 @@ class SystemTray(QObject):
         self._tray_icon.activated.connect(self._on_tray_activated)
         
         # Set the tray icon
-        self._tray_icon.setIcon(self._icon)
+        self._tray_icon.setIcon(self._icons["idle"])
         
         # Show the tray icon
         self._tray_icon.show()
@@ -299,15 +304,14 @@ class SystemTray(QObject):
     def _update_icon(self) -> None:
         """Update the tray icon based on current state."""
         if self._muted:
-            icon = self._create_muted_icon()
+            key = "muted"
         elif self._speaking:
-            icon = self._create_speaking_icon()
+            key = "speaking"
         elif self._listening:
-            icon = self._create_listening_icon()
+            key = "listening"
         else:
-            icon = self._create_icon()
-        
-        self._tray_icon.setIcon(icon)
+            key = "idle"
+        self._tray_icon.setIcon(self._icons[key])
     
     def show(self) -> None:
         """Show the tray icon."""

@@ -80,11 +80,8 @@ class GUIEventHandler:
         try:
             from PySide6.QtCore import QThread
             self._QThread = QThread
-            self._is_main_thread = lambda: (
-                QThread.currentThread() == self._QThread.currentThread()
-            )
         except ImportError:
-            self._is_main_thread = lambda: True
+            self._QThread = None
         
         # Connect to Qt's main thread processing
         self._setup_qt_integration()
@@ -105,11 +102,10 @@ class GUIEventHandler:
             
             self._relay = EventRelay(self)
             
-            # Set up timer for periodic event processing
+            # Set up timer for fallback queue processing (started on demand).
             self._processing_timer = QTimer()
             self._processing_timer.setInterval(16)  # ~60 FPS
             self._processing_timer.timeout.connect(self._process_pending)
-            self._processing_timer.start()
             
         except ImportError:
             # Qt not available, events will be processed synchronously
@@ -183,12 +179,16 @@ class GUIEventHandler:
             event: The event to queue.
         """
         self._pending_events.append(event)
+        if self._processing_timer is not None and not self._processing_timer.isActive():
+            self._processing_timer.start()
     
     def _process_pending(self) -> None:
         """Process any pending events from the queue."""
         while self._pending_events:
             event = self._pending_events.pop(0)
             self._process_event(event)
+        if self._processing_timer is not None and not self._pending_events:
+            self._processing_timer.stop()
     
     def _process_event(self, event: GUIEvent) -> None:
         """Process a GUI event.
@@ -253,11 +253,13 @@ class GUIEventHandler:
         if self.app._main_window is not None:
             self.app._main_window.set_listening(True)
             self.app._main_window.set_status("Listening...")
+            self.app._main_window.set_muted(False)
         
         # Update tray icon
         if self.app._tray is not None:
             self.app._tray.set_listening(True)
             self.app._tray.set_speaking(False)
+            self.app._tray.set_muted(False)
     
     def _handle_paused(self, event: GUIEvent) -> None:
         """Handle paused event."""
@@ -268,11 +270,13 @@ class GUIEventHandler:
             self.app._main_window.set_status("Paused")
             self.app._main_window.set_listening(False)
             self.app._main_window.set_speaking(False)
+            self.app._main_window.set_muted(True)
         
         # Update tray
         if self.app._tray is not None:
             self.app._tray.set_listening(False)
             self.app._tray.set_speaking(False)
+            self.app._tray.set_muted(True)
     
     def _handle_wake_detected(self, event: GUIEvent) -> None:
         """Handle wake_detected event."""

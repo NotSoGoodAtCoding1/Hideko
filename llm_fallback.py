@@ -178,11 +178,32 @@ class LLMFallback:
         self._backend = backend if backend is not None else (
             KoboldHttpBackend(config) if config.llm.enabled else NullBackend()
         )
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm")
+        self._persona_parts = self._load_persona_parts()
     
     def available(self) -> bool:
         """Return True if the backend can handle requests."""
         return self._backend.available()
     
+    def _load_persona_parts(self) -> list[str] | None:
+        """Load and cache persona text parts from the persona YAML file."""
+        cfg = self._config.llm
+        try:
+            persona_data = yaml.safe_load(cfg.persona_file.read_text(encoding="utf-8"))
+            if isinstance(persona_data, dict):
+                system_parts: list[str] = []
+                personality = persona_data.get("personality", "")
+                description = persona_data.get("description", "")
+                if personality and isinstance(personality, str):
+                    system_parts.append(personality)
+                if description and isinstance(description, str):
+                    system_parts.append(description)
+                return system_parts or None
+            logger.warning("persona_file does not contain valid YAML with personality/description fields")
+        except Exception as e:
+            logger.warning(f"Cannot read persona file {cfg.persona_file}: {e}")
+        return None
+
     def _build_messages(self, text: str, intent: str | None = None) -> list[dict[str, str]]:
         """Build the chat messages for the LLM.
 
@@ -194,49 +215,33 @@ class LLMFallback:
             A list of message dicts with 'role' and 'content'.
         """
         cfg = self._config.llm
-        
-        # Read persona file
-        try:
-            persona_data = yaml.safe_load(cfg.persona_file.read_text(encoding="utf-8"))
-            if isinstance(persona_data, dict):
-                personality = persona_data.get("personality", "")
-                description = persona_data.get("description", "")
-                system_parts = []
-                if personality and isinstance(personality, str):
-                    system_parts.append(personality)
-                if description and isinstance(description, str):
-                    system_parts.append(description)
-                if system_parts:
-                    system_content = "\n".join(system_parts) + "\n" + cfg.system_prompt
-                else:
-                    system_content = cfg.system_prompt
-            else:
-                logger.warning("persona_file does not contain valid YAML with personality/description fields")
-                system_content = cfg.system_prompt
-        except Exception as e:
-            logger.warning(f"Cannot read persona file {cfg.persona_file}: {e}")
+
+        if self._persona_parts:
+            system_content = "\n".join(self._persona_parts) + "\n" + cfg.system_prompt
+        else:
             system_content = cfg.system_prompt
-        
+
         # Build system message
         lines = [system_content]
-        
+
         # Add memory facts if available
-        if self._memory is not None and self._memory.all():
+        facts = self._memory.all() if self._memory is not None else {}
+        if facts:
             lines.append("")
             lines.append("Known facts about the user:")
-            for key, value in sorted(self._memory.all().items()):
+            for key, value in sorted(facts.items()):
                 lines.append(f"- {key}: {value}")
             lines.append("")
-        
+
         # Cap text at 500 characters
         capped_text = text[:500]
-        
+
         # Add intent if present
         if intent is not None:
             lines.append(f"User intent: {intent}")
-        
+
         user_content = "\n".join(lines) + f"\nUser: {capped_text}"
-        
+
         return [{"role": "system", "content": user_content}, {"role": "user", "content": capped_text}]
     
     def respond(self, text: str, intent: str | None = None) -> LLMReply:
@@ -258,25 +263,19 @@ class LLMFallback:
         messages = self._build_messages(text, intent)
         t0 = time.perf_counter()
         
-        # Use ThreadPoolExecutor with timeout - note that a timed-out thread cannot be killed
-        # and may still occupy a core until it finishes. This is why max_tokens is small (80).
-        pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self._backend.generate, messages)
-        
+        # Use the long-lived executor; a timed-out thread cannot be killed and may
+        # still occupy the single worker until it finishes.
+        future = self._pool.submit(self._backend.generate, messages)
+
         try:
             reply = future.result(timeout=self._config.llm.timeout_s)
         except FuturesTimeout as exc:
-            pool.shutdown(wait=False, cancel_futures=True)
             raise LLMError(
                 f"LLM generation exceeded {self._config.llm.timeout_s:.0f}s"
             ) from exc
         except Exception as e:
             # Wrap any backend exceptions in LLMError for consistent error handling
-            pool.shutdown(wait=False, cancel_futures=True)
             raise LLMError(f"LLM generation failed: {e}") from e
-        finally:
-            # Ensure the pool is released on success path too
-            pass
         
         # The TTS voice is English-only and Windows consoles are often cp1251;
         # drop emoji/non-ASCII (e.g. the 🌍✨ Qwen likes to append).

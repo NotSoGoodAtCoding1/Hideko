@@ -52,8 +52,6 @@ class VUMeter(QWidget):
         # Visual properties
         self._level: float = 0.0
         self._peak_level: float = 0.0
-        self._peak_hold_time: int = 500  # ms to hold peak indicator
-        self._falloff_speed: float = 0.95  # Falloff multiplier per frame
         
         # Colors
         colors = Style.colors

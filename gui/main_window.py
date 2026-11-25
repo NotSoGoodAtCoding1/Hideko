@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
 )
-from PySide6.QtGui import QFont, QPalette, QColor
+from PySide6.QtGui import QFont, QPalette, QColor, QTextCursor
 
 from gui.styles import Style, Sizes, Spacing
 
@@ -43,7 +43,9 @@ class ConversationDisplay(QTextBrowser):
     This is a read-only text display that shows the conversation between
     the user and Hideko.
     """
-    
+
+    _MAX_BLOCKS = 400
+
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the conversation display.
         
@@ -89,13 +91,25 @@ class ConversationDisplay(QTextBrowser):
         # Initial content
         self.append("<i>Hideko is starting up...</i>")
     
+    def _append_capped(self, html: str) -> None:
+        """Append HTML and trim old blocks to keep history bounded."""
+        self.append(html)
+        if self.document().blockCount() > self._MAX_BLOCKS:
+            cursor = QTextCursor(self.document().firstBlock())
+            cursor.movePosition(
+                QTextCursor.MoveOperation.NextBlock,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            cursor.removeSelectedText()
+            cursor.deleteChar()  # remove the leftover empty block separator
+
     def add_user_message(self, text: str) -> None:
         """Add a user message to the conversation.
         
         Args:
             text: The user's message text.
         """
-        self.append(f"<b>You:</b> {text}")
+        self._append_capped(f"<b>You:</b> {text}")
         self._scroll_to_bottom()
     
     def add_assistant_message(self, text: str) -> None:
@@ -104,7 +118,7 @@ class ConversationDisplay(QTextBrowser):
         Args:
             text: The assistant's message text.
         """
-        self.append(f"<b>Hideko:</b> {text}")
+        self._append_capped(f"<b>Hideko:</b> {text}")
         self._scroll_to_bottom()
     
     def add_system_message(self, text: str) -> None:
@@ -113,7 +127,7 @@ class ConversationDisplay(QTextBrowser):
         Args:
             text: The system message text.
         """
-        self.append(f"<i><font color='gray'>{text}</font></i>")
+        self._append_capped(f"<i><font color='gray'>{text}</font></i>")
         self._scroll_to_bottom()
     
     def _scroll_to_bottom(self) -> None:
@@ -315,6 +329,9 @@ class MainWindow(QMainWindow):
     status information, and provides user controls.
     """
     
+    # Signal for mute button clicks - exposed for GUIApp to connect
+    mute_clicked = Signal(bool)
+    
     def __init__(self, config: AppConfig, app: GUIApp) -> None:
         """Initialize the main window.
         
@@ -459,6 +476,7 @@ class MainWindow(QMainWindow):
         """Set up signal connections."""
         if self._control_panel:
             self._control_panel.mute_clicked.connect(self._on_mute_clicked)
+            self._control_panel.mute_clicked.connect(self.mute_clicked)
             self._control_panel.listen_clicked.connect(self._on_listen_clicked)
     
     def _on_mute_clicked(self, muted: bool) -> None:
@@ -562,6 +580,15 @@ class MainWindow(QMainWindow):
                         background-color: rgb(200, 200, 200);
                     }"""
                 )
+    
+    def set_muted(self, muted: bool) -> None:
+        """Set the mute button state.
+        
+        Args:
+            muted: True if muted, False otherwise.
+        """
+        if self._control_panel:
+            self._control_panel.set_muted(muted)
     
     def set_timing(self, stt: float, resp: float, tts: float, play: float) -> None:
         """Set the timing display.

@@ -10,6 +10,23 @@ import ctypes
 from ctypes import wintypes
 
 
+class _PMC(ctypes.Structure):
+    """Windows PROCESS_MEMORY_COUNTERS structure for RSS queries."""
+
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("PageFaultCount", wintypes.DWORD),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
 def setup_logging(config, *, debug: bool = False, log_file: Optional[Path] = None) -> None:
     """Set up logging configuration based on the provided LoggingConfig.
 
@@ -68,21 +85,6 @@ def memory_rss_mb() -> Optional[float]:
         The RSS memory usage in megabytes as a float on Windows, None otherwise.
     """
     try:
-        # Define the process memory structure for Windows
-        class _PMC(ctypes.Structure):
-            _fields_ = [
-                ("cb", wintypes.DWORD),
-                ("PageFaultCount", wintypes.DWORD),
-                ("PeakWorkingSetSize", ctypes.c_size_t),
-                ("WorkingSetSize", ctypes.c_size_t),
-                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                ("PagefileUsage", ctypes.c_size_t),
-                ("PeakPagefileUsage", ctypes.c_size_t)
-            ]
-
         # Get current process handle
         process_handle = ctypes.windll.kernel32.GetCurrentProcess()
 
@@ -94,7 +96,7 @@ def memory_rss_mb() -> Optional[float]:
         ctypes.windll.psapi.GetProcessMemoryInfo(
             process_handle,
             ctypes.byref(pmc),
-            ctypes.sizeof(pmc)
+            ctypes.sizeof(pmc),
         )
 
         # Return working set size in MB

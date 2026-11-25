@@ -77,6 +77,10 @@ class GUIApp:
             self._qapp = QApplication(sys.argv)
         else:
             self._qapp = app_instance
+
+    def _on_startup_event(self, _event) -> None:
+        """Ensure a QApplication exists when startup is published."""
+        self._ensure_qapp()
     
     def _init_components(self) -> None:
         """Initialize GUI components (lazy loading)."""
@@ -100,12 +104,13 @@ class GUIApp:
             self._event_handler.subscribe()
         
         # Also subscribe to the bus for periodic updates
-        self.bus.subscribe("startup", lambda e: self._ensure_qapp())
+        self.bus.subscribe("startup", self._on_startup_event)
     
     def unsubscribe_from_events(self) -> None:
         """Unsubscribe from events."""
         if self._event_handler is not None:
             self._event_handler.unsubscribe()
+        self.bus.unsubscribe(self._on_startup_event)
     
     @property
     def qapp(self) -> QApplication | None:
@@ -196,6 +201,10 @@ class GUIApp:
         try:
             from gui.main_window import MainWindow
             self._main_window = MainWindow(self.config, self)
+            
+            # Connect main window mute signal to handler
+            if self._main_window is not None and hasattr(self._main_window, 'mute_clicked'):
+                self._main_window.mute_clicked.connect(self._on_mute_toggled)
         except ImportError:
             # MainWindow not yet created - this is expected before task 04
             logger.debug("MainWindow not yet available")
@@ -217,14 +226,31 @@ class GUIApp:
             logger.debug("System tray not available")
             self._tray = None
     
-    def _on_tray_mute_toggled(self, muted: bool) -> None:
-        """Handle mute toggled from tray.
+    def _on_mute_toggled(self, muted: bool) -> None:
+        """Handle mute toggled from any GUI source (tray or main window).
         
         Args:
             muted: Whether mute is now active.
         """
-        logger.info("Tray mute toggled: %s", "muted" if muted else "unmuted")
-        # This will be connected to actual mute functionality in later tasks
+        logger.info("Mute toggled: %s", "muted" if muted else "unmuted")
+        # Publish event to bus for HidekoApp to handle
+        self.bus.publish("mute_toggle", muted=muted)
+        
+        # Update tray icon state
+        if self._tray is not None:
+            self._tray.set_muted(muted)
+        
+        # Update main window mute button state
+        if self._main_window is not None:
+            self._main_window.set_muted(muted)
+    
+    def _on_tray_mute_toggled(self, muted: bool) -> None:
+        """Handle mute toggled from tray. Forwards to main handler.
+        
+        Args:
+            muted: Whether mute is now active.
+        """
+        self._on_mute_toggled(muted)
     
     def _on_tray_quit(self) -> None:
         """Handle quit request from tray."""
@@ -261,5 +287,6 @@ class GUIApp:
         Args:
             samples: Raw audio samples from the microphone (numpy array).
         """
-        if self._main_window is not None:
-            self._main_window.update_audio_visualization(samples=samples)
+        if self._main_window is None or not self._visible:
+            return
+        self._main_window.update_audio_visualization(samples=samples)

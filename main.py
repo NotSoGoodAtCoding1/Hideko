@@ -127,6 +127,9 @@ class HidekoApp:
         else:
             self.responder = ResponseHandler(self.config, memory=self.memory)
             logger.info("responder: ResponseHandler (%d triggers)", self.responder.trigger_count)
+        
+        # 10. Subscribe to mute_toggle events from GUI
+        self.bus.subscribe("mute_toggle", self._on_mute_toggle)
 
         self.bus.publish(
             "ready",
@@ -158,6 +161,23 @@ class HidekoApp:
             except Exception:
                 # Ignore Qt event processing errors to avoid breaking audio loop
                 pass
+    
+    def _on_mute_toggle(self, event: object) -> None:
+        """Handle mute toggle event from GUI.
+        
+        Args:
+            event: The event object containing muted state.
+        """
+        muted = event.data.get("muted", True)
+        self._paused = muted
+        self._listening_shown = False
+        if self._paused:
+            self.bus.publish("paused")
+            self.turn.transition(TurnState.PAUSED)
+        else:
+            self.bus.publish("listening")
+            self._listening_shown = True
+            self.turn.transition(TurnState.LISTENING)
 
     def run(self) -> int:
         try:
@@ -215,7 +235,7 @@ class HidekoApp:
                 self._process_qt_events()
                 
                 # Feed audio to GUI visualization
-                if self._gui_app is not None and hasattr(self._gui_app, 'update_audio_visualization'):
+                if self._gui_app is not None:
                     try:
                         self._gui_app.update_audio_visualization(block)
                     except Exception:
@@ -341,13 +361,8 @@ class HidekoApp:
                     self.mic.flush(self.config.vad.post_playback_flush_ms)
                     self.turn.transition(TurnState.IDLE)
 
-                # Process Qt events if GUI is available (every ~16ms for smooth UI updates)
-                if self._gui_app is not None and hasattr(self._gui_app, 'process_events'):
-                    try:
-                        self._gui_app.process_events()
-                    except Exception:
-                        # Ignore Qt event processing errors to avoid breaking audio loop
-                        pass
+                # Process Qt events if GUI is available.
+                self._process_qt_events()
 
                 # Log memory every 20 turns
                 if turn % 20 == 0:

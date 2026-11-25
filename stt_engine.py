@@ -180,7 +180,7 @@ class STTEngine:
             )
 
         # Build final transcript with average log probability from segments
-        avg_logprob = self._compute_avg_logprob(segments)
+        avg_logprob = self._compute_avg_logprob(segments_list)
 
         logger.info(
             "stt: %.2fs for %.2fs audio -> %s",

@@ -99,6 +99,7 @@ class UtteranceRecorder:
         # State machine variables
         self._state: str = "idle"
         self._buffer: list[np.ndarray] = []
+        self._buffered_samples = 0
         # Pre-roll buffer stores up to pre_roll_ms worth of blocks (maxlen = blocks needed)
         self._pre_roll_buffer: deque[np.ndarray] = deque(maxlen=int(config.vad.pre_roll_ms / config.audio.block_ms) + 1)
         
@@ -191,6 +192,7 @@ class UtteranceRecorder:
                     self._state = "speech"
                     # Buffer starts with pre-roll (includes onset, since pre_roll > min_speech)
                     self._buffer = list(self._pre_roll_buffer)
+                    self._buffered_samples = sum(b.shape[0] for b in self._buffer)
                     self._silence_run_ms = 0
                     self._speech_blocks_count = 0
 
@@ -201,6 +203,7 @@ class UtteranceRecorder:
         elif self._state == "speech":
             # Append every block to buffer
             self._buffer.append(block)
+            self._buffered_samples += block.shape[0]
 
             is_speech = self._vad.is_speech(block)
 
@@ -215,8 +218,7 @@ class UtteranceRecorder:
                 return utterance
 
             # Check max utterance duration (truncate and emit)
-            buffered_samples = sum(len(b) for b in self._buffer)
-            if buffered_samples >= self._max_buffer_samples:
+            if self._buffered_samples >= self._max_buffer_samples:
                 utterance = self._emit(0)  # Don't trim trailing silence
                 return utterance
 
@@ -224,6 +226,7 @@ class UtteranceRecorder:
             # Clear buffers and return to idle
             self._pre_roll_buffer.clear()
             self._buffer.clear()
+            self._buffered_samples = 0
             self._state = "idle"
             self._silence_run_ms = 0
 
@@ -285,6 +288,7 @@ class UtteranceRecorder:
         self._last_utterance_s = duration_s
         self._pre_roll_buffer.clear()
         self._buffer.clear()
+        self._buffered_samples = 0
         self._state = "trailing"
 
         return utterance
@@ -307,6 +311,7 @@ class UtteranceRecorder:
         """Reset state and buffers."""
         self._state = "idle"
         self._buffer.clear()
+        self._buffered_samples = 0
         self._pre_roll_buffer.clear()
         self._silence_run_ms = 0
         self._speech_blocks_count = 0
